@@ -43,3 +43,9 @@ plans/
 .pi/hf-sessions-backup/
 collect.sh
 packages/agent/docs/extensions/pi-server-artifact/index.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
