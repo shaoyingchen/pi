@@ -13,7 +13,10 @@ Reuse from any agent in this repo:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 class Tool:
@@ -26,10 +29,14 @@ class Tool:
         self.fn = fn
 
     def run(self, arguments: dict) -> str:
+        logger.info("tool [%s] call begin, arguments: %s", self.name, arguments)
         try:
-            return str(self.fn(**arguments))
-        except Exception as exc:                    # report tool errors back to the model
+            result = str(self.fn(**arguments))
+        except Exception as exc:
+            logger.error("tool [%s] call failed: %s", self.name, exc, exc_info=True)
             return f"tool error: {exc}"
+        logger.info("tool [%s] call ok, result: %s", self.name, result)
+        return result
 
     def schema(self) -> dict:
         return {"type": "function",
@@ -44,10 +51,27 @@ def run_tool_calls(tools: dict[str, Tool], calls: list[dict]) -> list[dict]:
     Unknown tool names produce an error message so the model can recover.
     """
     messages = []
+    logger.info("run_tool_calls: executing %d model tool call(s)", len(calls))
     for call in calls:
         fn = call["function"]
         tool = tools.get(fn["name"])
-        result = tool.run(json.loads(fn.get("arguments") or "{}")) if tool \
-            else f"unknown tool: {fn['name']}"
+        if tool is None:
+            result = f"unknown tool: {fn['name']}"
+            logger.warning(
+                "run_tool_calls: unknown tool %r (call id=%s), result=%s",
+                fn["name"], call.get("id"), result,
+            )
+        else:
+            arguments = json.loads(fn.get("arguments") or "{}")
+            logger.info(
+                "run_tool_calls: call id=%s -> tool [%s], arguments=%s",
+                call.get("id"), tool.name, arguments,
+            )
+            result = tool.run(arguments)
+            logger.info(
+                "run_tool_calls: call id=%s tool [%s] result=%s",
+                call.get("id"), tool.name, result,
+            )
         messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+    logger.info("run_tool_calls: done, %d message(s) produced", len(messages))
     return messages

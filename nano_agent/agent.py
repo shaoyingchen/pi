@@ -96,7 +96,11 @@ class Agent:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import logging
     import sys
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     # example tool bundled by default so the minimal agent does something useful
     calculator = Tool(
