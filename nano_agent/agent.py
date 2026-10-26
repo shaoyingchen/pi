@@ -1,6 +1,10 @@
 """A minimal agent: an LLM chat loop with basic tool calling.
 
-Only uses the Python standard library, so it runs anywhere with Python 3.8+.
+Uses the official OpenAI SDK and works with any OpenAI-compatible endpoint.
+Install the dependency first:
+
+    python -m pip install openai
+
 Configure via environment variables:
 
     OPENAI_API_KEY    - required
@@ -11,71 +15,50 @@ Usage:
 
     python agent.py                      # read terminal input, one round per line
     python -c "from agent import Agent; print(Agent().chat('hi'))"
+
+Reuse the tool module from other code:
+
+    from nano_agent.tool import Tool, run_tool_calls
 """
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.request
-from typing import Callable
+
+import openai
+
+try:
+    from .tool import Tool, run_tool_calls   # package context (from nano_agent import ...)
+except ImportError:
+    from tool import Tool, run_tool_calls    # plain-script context (python agent.py)
 
 
 # ---------------------------------------------------------------------------
-# LLM client: OpenAI-compatible chat completions over HTTP, stdlib only
+# LLM client: chat completions via the OpenAI SDK
 # ---------------------------------------------------------------------------
 
 class LLMClient:
-    """Thin wrapper around an OpenAI-compatible /chat/completions endpoint."""
+    """Thin wrapper around the OpenAI SDK chat completions endpoint."""
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None, model: str | None = None):
-        self.base_url = (base_url or os.getenv("OPENAI_BASE_URL")
-                         or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None,
              temperature: float = 0.7) -> dict:
         """Return the raw response message dict, including tool_calls when present."""
-        payload = {"model": self.model, "messages": messages, "temperature": temperature}
+        kwargs: dict = {"model": self.model, "messages": messages, "temperature": temperature}
         if tools:
-            payload["tools"] = tools
-        request = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer {self.api_key}"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        return body["choices"][0]["message"]
+            kwargs["tools"] = tools
+        completion = self.client.chat.completions.create(**kwargs)
+        return completion.choices[0].message.model_dump(exclude_none=True)
 
 
 # ---------------------------------------------------------------------------
 # Minimal agent loop
 # ---------------------------------------------------------------------------
-
-class Tool:
-    """A callable the model can invoke; name/description/payload drive the prompt."""
-
-    def __init__(self, name: str, description: str, parameters: dict, fn: Callable[..., str]):
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-        self.fn = fn
-
-    def run(self, arguments: dict) -> str:
-        try:
-            return str(self.fn(**arguments))
-        except Exception as exc:                # report tool errors back to the model
-            return f"tool error: {exc}"
-
-    def schema(self) -> dict:
-        return {"type": "function",
-                "function": {"name": self.name, "description": self.description,
-                             "parameters": self.parameters}}
-
 
 class Agent:
     """Repeatedly ask the LLM for a turn; if it requests tools, run them and retry."""
@@ -103,17 +86,9 @@ class Agent:
                 return reply.get("content") or ""
 
             # execute tool calls, append results, and continue the loop
-            for call in calls:
-                self._execute_call(messages, call)
+            messages.extend(run_tool_calls(self.tools, calls))
 
         return messages[-1].get("content") or "(max rounds reached)"
-
-    def _execute_call(self, messages: list[dict], call: dict) -> None:
-        fn = call["function"]
-        tool = self.tools.get(fn["name"])
-        result = tool.run(json.loads(fn.get("arguments") or "{}")) if tool \
-            else f"unknown tool: {fn['name']}"
-        messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
 
 
 # ---------------------------------------------------------------------------
