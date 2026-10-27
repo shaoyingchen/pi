@@ -25,35 +25,31 @@ from __future__ import annotations
 
 import os
 
-import openai
-
 try:
-    from .tool import Tool, run_tool_calls   # package context (from nano_agent import ...)
+    from .llm import BaseLLM, build_llm   # package context (from nano_agent import ...)
+    from .tool import Tool, run_tool_calls
 except ImportError:
-    from tool import Tool, run_tool_calls    # plain-script context (python agent.py)
+    from llm import BaseLLM, build_llm    # plain-script context (python agent.py)
+    from tool import Tool, run_tool_calls
 
 
 # ---------------------------------------------------------------------------
-# LLM client: chat completions via the OpenAI SDK
+# LLM client: chat completions via the OpenAI SDK (kept for back-compat)
 # ---------------------------------------------------------------------------
 
 class LLMClient:
-    """Thin wrapper around the OpenAI SDK chat completions endpoint."""
+    """Thin wrapper around the OpenAI SDK chat completions endpoint.
+
+    Deprecated convenience alias: prefer ``build_llm("openai", ...)`` or the
+    ``OpenAILLM`` backend, which is backend-agnostic via ``nano_agent.llm``.
+    """
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None, model: str | None = None):
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._llm = build_llm("openai", base_url=base_url, api_key=api_key, model=model)
 
-    def chat(self, messages: list[dict], tools: list[dict] | None = None,
-             temperature: float = 0.7) -> dict:
+    def chat(self, messages: list[dict], tools: list[dict] | None = None, **kwargs: object) -> dict:
         """Return the raw response message dict, including tool_calls when present."""
-        kwargs: dict = {"model": self.model, "messages": messages, "temperature": temperature}
-        if tools:
-            kwargs["tools"] = tools
-        completion = self.client.chat.completions.create(**kwargs)
-        return completion.choices[0].message.model_dump(exclude_none=True)
+        return self._llm.chat(messages, tools=tools, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +60,18 @@ class Agent:
     """Repeatedly ask the LLM for a turn; if it requests tools, run them and retry."""
 
     def __init__(self, system: str = "You are a helpful assistant.",
-                 tools: list[Tool] | None = None, client: LLMClient | None = None):
+                 tools: list[Tool] | None = None, client: BaseLLM | None = None,
+                 provider: str | None = None, model: str | None = None):
+        """Build an agent.
+
+        ``client``: any backend exposing ``chat(messages, tools=None, **kwargs)``.
+        When omitted, the backend is resolved via ``build_llm(provider, model)``
+        (``LLM_PROVIDER`` env var, then ``openai``); pass ``provider="echo"``
+        for a dependency-free local backend.
+        """
         self.system = system
         self.tools = {t.name: t for t in (tools or [])}
-        self.client = client or LLMClient()
+        self.client = client or build_llm(provider=provider, model=model)
 
     def chat(self, user_message: str, max_rounds: int = 10) -> str:
         """Run a full conversation turn and return the final assistant text."""
