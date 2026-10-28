@@ -24,13 +24,14 @@ Reuse the tool module from other code:
 from __future__ import annotations
 
 import os
+from typing import Callable
 
 try:
-    from .llm import BaseLLM, build_llm   # package context (from nano_agent import ...)
-    from .tool import Tool, run_tool_calls
+    from .llm import BaseLLM, build_llm            # package context (from nano_agent import ...)
+    from .tool import Tool, ApprovalDecision, run_tool_calls
 except ImportError:
-    from llm import BaseLLM, build_llm    # plain-script context (python agent.py)
-    from tool import Tool, run_tool_calls
+    from llm import BaseLLM, build_llm             # plain-script context (python agent.py)
+    from tool import Tool, ApprovalDecision, run_tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -61,16 +62,22 @@ class Agent:
 
     def __init__(self, system: str = "You are a helpful assistant.",
                  tools: list[Tool] | None = None, client: BaseLLM | None = None,
-                 provider: str | None = None, model: str | None = None):
+                 provider: str | None = None, model: str | None = None,
+                 approver: Callable[[Tool, dict], ApprovalDecision] | None = None):
         """Build an agent.
 
         ``client``: any backend exposing ``chat(messages, tools=None, **kwargs)``.
         When omitted, the backend is resolved via ``build_llm(provider, model)``
         (``LLM_PROVIDER`` env var, then ``openai``); pass ``provider="echo"``
         for a dependency-free local backend.
+
+        ``approver``: optional Human-in-the-loop callback
+        ``approver(tool, arguments) -> ApprovalDecision`` controlling whether a
+        tool call requiring approval may run (see ``Tool.requires_approval``).
         """
         self.system = system
         self.tools = {t.name: t for t in (tools or [])}
+        self.approver = approver
         self.client = client or build_llm(provider=provider, model=model)
 
     def chat(self, user_message: str, max_rounds: int = 10) -> str:
@@ -90,7 +97,7 @@ class Agent:
                 return reply.get("content") or ""
 
             # execute tool calls, append results, and continue the loop
-            messages.extend(run_tool_calls(self.tools, calls))
+            messages.extend(run_tool_calls(self.tools, calls, approver=self.approver))
 
         return messages[-1].get("content") or "(max rounds reached)"
 
