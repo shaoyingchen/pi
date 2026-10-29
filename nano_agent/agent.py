@@ -19,11 +19,22 @@ Usage:
 Reuse the tool module from other code:
 
     from nano_agent.tool import Tool, run_tool_calls
+
+Agent-to-Agent (A2A) composition:
+
+    math = Agent(tools=[calculate_tool])
+    parent = Agent(tools=[make_agent_tool(math, "math_agent", "delegate arithmetic")])
+    parent.chat("ask the math agent for 2+2")
+
+A child Agent exposed via ``make_agent_tool`` runs its own full tool loop when
+invoked, so nesting is recursive: the parent loop consumes the child's final
+reply as a regular ``role: tool`` result.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from typing import Callable
 
 try:
@@ -103,15 +114,76 @@ class Agent:
 
 
 # ---------------------------------------------------------------------------
+# Agent-to-Agent (A2A) composition
+# ---------------------------------------------------------------------------
+
+def make_agent_tool(child: "Agent", name: str | None = None,
+                    description: str | None = None) -> Tool:
+    """Wrap an ``Agent`` as a ``Tool`` so a parent agent can delegate to it (A2A).
+
+    Invoking the returned tool runs ``child.chat(task)`` end-to-end (the child
+    runs its own tool loop) and returns the child's final reply. Because the
+    tool parameters are a single free-form ``task`` string, a parent can chain
+    arbitrarily: creating, say, ``Agent(tools=[specialist_a, specialist_b])``
+    lets the parent orchestrate specialist sub-agents.
+    """
+    return Tool(
+        name=name or f"agent_{child.client.name if hasattr(child.client, 'name') else 'sub'}",
+        description=description or "Delegate the task to a sub-agent and return its final answer.",
+        parameters={"type": "object",
+                    "properties": {"task": {"type": "string",
+                                            "description": "Task/instruction to send to the sub-agent."}},
+                    "required": ["task"]},
+        fn=lambda task: child.chat(task),   # noqa: S307 - intentionally invokes the child loop
+    )
+
+
+def _run_a2a_example() -> None:
+    """Demo of A2A composition that needs no API key (uses the ``echo`` backend).
+
+    Renders a 3-level tree: root -> research sub-agent -> math sub-agent.
+    The root asks the research agent, which delegates the numeric part to the
+    math agent. Because ``EchoLLM`` answers with the last user/tool message,
+    this deterministically exercises the parent->child->grandchild plumbing.
+    """
+    try:
+        from .llm import EchoLLM    # package context
+    except ImportError:
+        from llm import EchoLLM     # plain-script context (python agent.py)
+
+    echo = EchoLLM()
+
+    math = Agent(system="Math specialist.", client=echo,
+                 tools=[Tool("calc", "add two numbers",
+                             {"type": "object",
+                              "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                              "required": ["a", "b"]},
+                             lambda a, b: a + b)])
+
+    research = Agent(system="Research specialist.", client=echo,
+                     tools=[make_agent_tool(math, "math_agent", "Delegates math tasks.")])
+
+    root = Agent(system="You are the root orchestrator.", client=echo,
+                 tools=[make_agent_tool(research, "research_agent", "Delegates research tasks.")])
+
+    print("root -> research_agent(task='figure out 20+22') -> math_agent")
+    print(root.chat("figure out 20+22"))
+    print("a2a example done.")
+
+
+# ---------------------------------------------------------------------------
 # Run a REPL-style session when executed directly
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import logging
-    import sys
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    if "--example" in sys.argv and sys.argv[sys.argv.index("--example") + 1:][:1] == ["a2a"]:
+        _run_a2a_example()
+        sys.exit(0)
 
     # example tool bundled by default so the minimal agent does something useful
     calculator = Tool(
