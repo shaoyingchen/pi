@@ -29,13 +29,24 @@ Agent-to-Agent (A2A) composition:
 A child Agent exposed via ``make_agent_tool`` runs its own full tool loop when
 invoked, so nesting is recursive: the parent loop consumes the child's final
 reply as a regular ``role: tool`` result.
+
+Plan-and-Execute mode:
+
+    steps, result = plan_and_execute(task, executor)
+    # planner decomposes the task into ordered steps, the executor runs
+    # each step as its own tool-enabled turn and chains the outcomes.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
 import sys
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 try:
     from .llm import BaseLLM, build_llm            # package context (from nano_agent import ...)
@@ -138,6 +149,75 @@ def make_agent_tool(child: "Agent", name: str | None = None,
     )
 
 
+# ---------------------------------------------------------------------------
+# Plan-and-Execute mode
+# ---------------------------------------------------------------------------
+
+PLANNER_SYSTEM = (
+    "You are a planning agent. Break the user's task into a short, ordered list "
+    "of concrete executable steps. Output ONLY plain JSON in this exact shape:\n"
+    '{"steps": ["step 1", "step 2", ...]}\n'
+    "Do not include any other text, markdown, or commentary."
+)
+
+
+def extract_plan(text: str) -> "list[str]":
+    """Parse ``{\"steps\": [...]}`` (optionally wrapped in ```json fences) from ``text``.
+
+    On failure returns the whole text as a single step, and logs a warning.
+    """
+    cleaned = text.strip()
+
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
+    if fence:
+        cleaned = fence.group(1).strip()
+    try:
+        data = json.loads(cleaned)
+        steps = data.get("steps")
+        if isinstance(steps, list) and steps:
+            return [str(step).strip() for step in steps if str(step).strip()]
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    logger.warning("could not parse plan JSON from planner output: %r", text[:120])
+    return [text.strip()]
+
+
+def plan_and_execute(task: str, executor: "Agent",
+                     planner: "Agent | None" = None,
+                     max_steps: int = 10) -> tuple[list[str], str]:
+    """Run the plan-and-execute loop and return ``(steps, final_result)``.
+
+    A ``planner`` agent (default: a fresh Agent with the ``PLANNER_SYSTEM``
+    prompt and the same backend as ``executor``) decomposes ``task`` into
+    ordered steps; the ``executor`` agent (which owns the actual tools) then
+    runs each step through its full tool loop. Every step's final reply is
+    appended to the next step's instructions so dependent steps can reuse
+    earlier outcomes. ``max_steps`` caps planning output.
+    """
+    if planner is None:
+        planner = Agent(
+            system=PLANNER_SYSTEM,
+            tools=[],
+            client=executor.client,        # same backend, no tools
+            provider=None,
+            model=None,
+        )
+    plan_text = planner.chat(f"Plan this task: {task}", max_rounds=3)
+    steps = extract_plan(plan_text)[:max_steps]
+    logger.info("plan_and_execute: plan=%s", steps)
+
+    history: list[str] = []
+    result = ""
+    for i, step in enumerate(steps, start=1):
+        prompt = f"{task}\n\nStep {i}/{len(steps)}: {step}"
+        if history:
+            prompt += "\n\nPrevious results (for reference):\n" + "\n".join(history)
+        logger.info("plan_and_execute: executing step %d/%d: %s", i, len(steps), step)
+        result = executor.chat(prompt)
+        history.append(f"[{i}] {step}: {result}")
+    return steps, result
+
+
 def _run_a2a_example() -> None:
     """Demo of A2A composition that needs no API key (uses the ``echo`` backend).
 
@@ -171,6 +251,38 @@ def _run_a2a_example() -> None:
     print("a2a example done.")
 
 
+def _run_plan_execute_example() -> None:
+    """Demo of plan-and-execute that needs no API key (uses the ``echo`` backend).
+
+    The planner agent is monkeypatched to emit a fixed JSON plan, then the
+    executor runs each step through its full tool loop, chaining outcomes.
+    """
+    try:
+        from .llm import EchoLLM    # package context
+    except ImportError:
+        from llm import EchoLLM     # plain-script context (python agent.py)
+
+    echo = EchoLLM()
+
+    executor = Agent(
+        system="You are a tool-using executor.",
+        client=echo,
+        tools=[Tool("add", "add two numbers",
+                    {"type": "object",
+                     "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                     "required": ["a", "b"]},
+                    lambda a, b: a + b)],
+    )
+
+    planner = Agent(system=PLANNER_SYSTEM, client=echo, tools=[])
+    planner.chat = lambda *a, **k: '{"steps": ["compute 20+22", "report the total"]}'
+
+    steps, result = plan_and_execute("figure out 20+22", executor, planner=planner)
+    print("plan:", steps)
+    print("final result:", result)
+    print("plan_execute example done.")
+
+
 # ---------------------------------------------------------------------------
 # Run a REPL-style session when executed directly
 # ---------------------------------------------------------------------------
@@ -183,6 +295,9 @@ if __name__ == "__main__":
 
     if "--example" in sys.argv and sys.argv[sys.argv.index("--example") + 1:][:1] == ["a2a"]:
         _run_a2a_example()
+        sys.exit(0)
+    if "--example" in sys.argv and sys.argv[sys.argv.index("--example") + 1:][:1] == ["plan_execute"]:
+        _run_plan_execute_example()
         sys.exit(0)
 
     # example tool bundled by default so the minimal agent does something useful

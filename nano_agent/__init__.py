@@ -2,10 +2,10 @@
 
 from .tool import Tool, ApprovalDecision, run_tool_calls
 from .llm import BaseLLM, OpenAILLM, EchoLLM, register_llm, build_llm
-from .agent import Agent, LLMClient, make_agent_tool
+from .agent import Agent, LLMClient, make_agent_tool, PLANNER_SYSTEM, extract_plan, plan_and_execute
 
 __all__ = [
     "Agent", "LLMClient", "Tool", "ApprovalDecision", "run_tool_calls",
     "BaseLLM", "OpenAILLM", "EchoLLM", "register_llm", "build_llm",
-    "make_agent_tool",
+    "make_agent_tool", "PLANNER_SYSTEM", "extract_plan", "plan_and_execute",
 ]
