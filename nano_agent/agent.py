@@ -194,6 +194,8 @@ def plan_and_execute(task: str, executor: "Agent",
     appended to the next step's instructions so dependent steps can reuse
     earlier outcomes. ``max_steps`` caps planning output.
     """
+    logger.info("plan_and_execute: start, task=%r, max_steps=%d, planner=%s",
+                task, max_steps, type(planner).__name__ if planner is not None else "auto")
     if planner is None:
         planner = Agent(
             system=PLANNER_SYSTEM,
@@ -202,19 +204,42 @@ def plan_and_execute(task: str, executor: "Agent",
             provider=None,
             model=None,
         )
-    plan_text = planner.chat(f"Plan this task: {task}", max_rounds=3)
-    steps = extract_plan(plan_text)[:max_steps]
-    logger.info("plan_and_execute: plan=%s", steps)
+        logger.info("plan_and_execute: auto planner built on backend=%s",
+                    type(executor.client).__name__)
 
+    # --- planning node ---
+    plan_prompt = f"Plan this task: {task}"
+    logger.info("plan_and_execute: planning, planner_input=%r", plan_prompt)
+    plan_text = planner.chat(plan_prompt, max_rounds=3)
+    logger.info("plan_and_execute: planner_raw_output=%r", plan_text)
+    all_steps = extract_plan(plan_text)
+    steps = all_steps[:max_steps]
+    logger.info("plan_and_execute: plan parsed, steps=%d (parsed %d, capped to max_steps=%d): %s",
+                len(steps), len(all_steps), max_steps, steps)
+    if not steps:
+        logger.warning("plan_and_execute: empty plan, nothing to execute; returning empty result")
+        return steps, ""
+
+    # --- execution node: run each step and chain the outcomes ---
     history: list[str] = []
     result = ""
     for i, step in enumerate(steps, start=1):
         prompt = f"{task}\n\nStep {i}/{len(steps)}: {step}"
         if history:
             prompt += "\n\nPrevious results (for reference):\n" + "\n".join(history)
-        logger.info("plan_and_execute: executing step %d/%d: %s", i, len(steps), step)
+        logger.info("plan_and_execute: executing step %d/%d, step=%r, context_steps=%d",
+                    i, len(steps), step, len(history))
+        logger.info("plan_and_execute: step %d/%d executor_input=%r", i, len(steps), prompt)
         result = executor.chat(prompt)
+        logger.info("plan_and_execute: step %d/%d executor_output=%r", i, len(steps), result)
+
+        # --- result-passing node: record this step's outcome for the next one ---
         history.append(f"[{i}] {step}: {result}")
+        logger.info("plan_and_execute: step %d/%d result passed on, history_size=%d",
+                    i, len(steps), len(history))
+
+    logger.info("plan_and_execute: done, executed %d step(s), final_result=%r",
+                len(steps), result)
     return steps, result
 
 
