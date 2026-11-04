@@ -48,10 +48,19 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
+# Default log truncation threshold; override globally via NANO_AGENT_LOG_LIMIT,
+# or per call via plan_and_execute(..., log_limit=...). <=0 disables clipping.
+DEFAULT_LOG_LIMIT = int(os.getenv("NANO_AGENT_LOG_LIMIT", "200"))
 
-def _clip(text: str, limit: int = 200) -> str:
-    """Clip long text for logging so huge prompts/responses don't flood the console."""
-    if len(text) <= limit:
+
+def _clip(text: str, limit: int | None = None) -> str:
+    """Clip long text for logging so huge prompts/responses don't flood the console.
+
+    ``limit``: max characters to keep; ``None`` falls back to ``DEFAULT_LOG_LIMIT``
+    (env ``NANO_AGENT_LOG_LIMIT``), and ``<= 0`` disables clipping entirely.
+    """
+    limit = DEFAULT_LOG_LIMIT if limit is None else limit
+    if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + f"...(truncated, {len(text)} chars total)"
 
@@ -191,7 +200,8 @@ def extract_plan(text: str) -> "list[str]":
 
 def plan_and_execute(task: str, executor: "Agent",
                      planner: "Agent | None" = None,
-                     max_steps: int = 10) -> tuple[list[str], str]:
+                     max_steps: int = 10,
+                     log_limit: int | None = None) -> tuple[list[str], str]:
     """Run the plan-and-execute loop and return ``(steps, final_result)``.
 
     A ``planner`` agent (default: a fresh Agent with the ``PLANNER_SYSTEM``
@@ -200,9 +210,13 @@ def plan_and_execute(task: str, executor: "Agent",
     runs each step through its full tool loop. Every step's final reply is
     appended to the next step's instructions so dependent steps can reuse
     earlier outcomes. ``max_steps`` caps planning output.
+
+    ``log_limit``: per-call override for log truncation (characters); ``None``
+    uses ``DEFAULT_LOG_LIMIT`` / env ``NANO_AGENT_LOG_LIMIT``, ``<= 0`` disables
+    clipping. Affects log display only, never the data passed to the agents.
     """
     logger.info("plan_and_execute: start, task=%r, max_steps=%d, planner=%s",
-                _clip(task), max_steps, type(planner).__name__ if planner is not None else "auto")
+                _clip(task, log_limit), max_steps, type(planner).__name__ if planner is not None else "auto")
     if planner is None:
         planner = Agent(
             system=PLANNER_SYSTEM,
@@ -216,9 +230,9 @@ def plan_and_execute(task: str, executor: "Agent",
 
     # --- planning node ---
     plan_prompt = f"Plan this task: {task}"
-    logger.info("plan_and_execute: planning, planner_input=%r", _clip(plan_prompt))
+    logger.info("plan_and_execute: planning, planner_input=%r", _clip(plan_prompt, log_limit))
     plan_text = planner.chat(plan_prompt, max_rounds=3)
-    logger.info("plan_and_execute: planner_raw_output=%r", _clip(plan_text))
+    logger.info("plan_and_execute: planner_raw_output=%r", _clip(plan_text, log_limit))
     all_steps = extract_plan(plan_text)
     steps = all_steps[:max_steps]
     logger.info("plan_and_execute: plan parsed, steps=%d (parsed %d, capped to max_steps=%d): %s",
@@ -236,9 +250,9 @@ def plan_and_execute(task: str, executor: "Agent",
             prompt += "\n\nPrevious results (for reference):\n" + "\n".join(history)
         logger.info("plan_and_execute: executing step %d/%d, step=%r, context_steps=%d",
                     i, len(steps), step, len(history))
-        logger.info("plan_and_execute: step %d/%d executor_input=%r", i, len(steps), _clip(prompt))
+        logger.info("plan_and_execute: step %d/%d executor_input=%r", i, len(steps), _clip(prompt, log_limit))
         result = executor.chat(prompt)
-        logger.info("plan_and_execute: step %d/%d executor_output=%r", i, len(steps), _clip(result))
+        logger.info("plan_and_execute: step %d/%d executor_output=%r", i, len(steps), _clip(result, log_limit))
 
         # --- result-passing node: record this step's outcome for the next one ---
         history.append(f"[{i}] {step}: {result}")
@@ -246,7 +260,7 @@ def plan_and_execute(task: str, executor: "Agent",
                     i, len(steps), len(history))
 
     logger.info("plan_and_execute: done, executed %d step(s), final_result=%r",
-                len(steps), _clip(result))
+                len(steps), _clip(result, log_limit))
     return steps, result
 
 
