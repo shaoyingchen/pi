@@ -48,6 +48,13 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
+
+def _clip(text: str, limit: int = 200) -> str:
+    """Clip long text for logging so huge prompts/responses don't flood the console."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...(truncated, {len(text)} chars total)"
+
 try:
     from .llm import BaseLLM, build_llm            # package context (from nano_agent import ...)
     from .tool import Tool, ApprovalDecision, run_tool_calls
@@ -195,7 +202,7 @@ def plan_and_execute(task: str, executor: "Agent",
     earlier outcomes. ``max_steps`` caps planning output.
     """
     logger.info("plan_and_execute: start, task=%r, max_steps=%d, planner=%s",
-                task, max_steps, type(planner).__name__ if planner is not None else "auto")
+                _clip(task), max_steps, type(planner).__name__ if planner is not None else "auto")
     if planner is None:
         planner = Agent(
             system=PLANNER_SYSTEM,
@@ -209,9 +216,9 @@ def plan_and_execute(task: str, executor: "Agent",
 
     # --- planning node ---
     plan_prompt = f"Plan this task: {task}"
-    logger.info("plan_and_execute: planning, planner_input=%r", plan_prompt)
+    logger.info("plan_and_execute: planning, planner_input=%r", _clip(plan_prompt))
     plan_text = planner.chat(plan_prompt, max_rounds=3)
-    logger.info("plan_and_execute: planner_raw_output=%r", plan_text)
+    logger.info("plan_and_execute: planner_raw_output=%r", _clip(plan_text))
     all_steps = extract_plan(plan_text)
     steps = all_steps[:max_steps]
     logger.info("plan_and_execute: plan parsed, steps=%d (parsed %d, capped to max_steps=%d): %s",
@@ -229,9 +236,9 @@ def plan_and_execute(task: str, executor: "Agent",
             prompt += "\n\nPrevious results (for reference):\n" + "\n".join(history)
         logger.info("plan_and_execute: executing step %d/%d, step=%r, context_steps=%d",
                     i, len(steps), step, len(history))
-        logger.info("plan_and_execute: step %d/%d executor_input=%r", i, len(steps), prompt)
+        logger.info("plan_and_execute: step %d/%d executor_input=%r", i, len(steps), _clip(prompt))
         result = executor.chat(prompt)
-        logger.info("plan_and_execute: step %d/%d executor_output=%r", i, len(steps), result)
+        logger.info("plan_and_execute: step %d/%d executor_output=%r", i, len(steps), _clip(result))
 
         # --- result-passing node: record this step's outcome for the next one ---
         history.append(f"[{i}] {step}: {result}")
@@ -239,7 +246,7 @@ def plan_and_execute(task: str, executor: "Agent",
                     i, len(steps), len(history))
 
     logger.info("plan_and_execute: done, executed %d step(s), final_result=%r",
-                len(steps), result)
+                len(steps), _clip(result))
     return steps, result
 
 
