@@ -67,9 +67,11 @@ def _clip(text: str, limit: int | None = None) -> str:
 try:
     from .llm import BaseLLM, build_llm            # package context (from nano_agent import ...)
     from .tool import Tool, ApprovalDecision, run_tool_calls
+    from .tools import make_read_file_tool
 except ImportError:
     from llm import BaseLLM, build_llm             # plain-script context (python agent.py)
     from tool import Tool, ApprovalDecision, run_tool_calls
+    from tools import make_read_file_tool
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +361,8 @@ if __name__ == "__main__":
     if not os.getenv("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY is not set; export it and try again.")
 
-    agent = Agent(system="You are a helpful assistant with arithmetic skills.",
-                  tools=[calculator])
+    agent = Agent(system="You are a helpful assistant with arithmetic and file-reading skills.",
+                  tools=[calculator, make_read_file_tool()])
 
     print('nano agent ready. type "exit" or Ctrl+C to quit.')
     while True:
