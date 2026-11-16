@@ -20,6 +20,17 @@ Reuse the tool module from other code:
 
     from nano_agent.tool import Tool, run_tool_calls
 
+Tool permission (allow / ask / deny):
+
+    from nano_agent import Agent, ToolPolicy, ALLOW, ASK
+    from nano_agent.permission import ConsoleApprover
+
+    agent = Agent(
+        tools=[make_read_file_tool()],
+        approver=ConsoleApprover(),
+        policy=ToolPolicy(default=ASK, rules={"read_file": ALLOW}),
+    )
+
 Agent-to-Agent (A2A) composition:
 
     math = Agent(tools=[calculate_tool])
@@ -66,11 +77,13 @@ def _clip(text: str, limit: int | None = None) -> str:
 
 try:
     from .llm import BaseLLM, build_llm            # package context (from nano_agent import ...)
-    from .tool import Tool, ApprovalDecision, run_tool_calls
+    from .permission import ConsoleApprover
+    from .tool import Tool, ApprovalDecision, ToolPolicy, ALLOW, ASK, run_tool_calls
     from .tools import make_read_file_tool
 except ImportError:
     from llm import BaseLLM, build_llm             # plain-script context (python agent.py)
-    from tool import Tool, ApprovalDecision, run_tool_calls
+    from permission import ConsoleApprover
+    from tool import Tool, ApprovalDecision, ToolPolicy, ALLOW, ASK, run_tool_calls
     from tools import make_read_file_tool
 
 
@@ -103,7 +116,8 @@ class Agent:
     def __init__(self, system: str = "You are a helpful assistant.",
                  tools: list[Tool] | None = None, client: BaseLLM | None = None,
                  provider: str | None = None, model: str | None = None,
-                 approver: Callable[[Tool, dict], ApprovalDecision] | None = None):
+                 approver: Callable[[Tool, dict], ApprovalDecision] | None = None,
+                 policy: ToolPolicy | None = None):
         """Build an agent.
 
         ``client``: any backend exposing ``chat(messages, tools=None, **kwargs)``.
@@ -113,11 +127,16 @@ class Agent:
 
         ``approver``: optional Human-in-the-loop callback
         ``approver(tool, arguments) -> ApprovalDecision`` controlling whether a
-        tool call requiring approval may run (see ``Tool.requires_approval``).
+        tool call resolved to ``ask`` may run (see ``ToolPolicy``).
+
+        ``policy``: per-tool permission policy (``allow`` / ``ask`` / ``deny``).
+        Omitted policy keeps the legacy behaviour: tools with
+        ``requires_approval=True`` ask, everything else runs.
         """
         self.system = system
         self.tools = {t.name: t for t in (tools or [])}
         self.approver = approver
+        self.policy = policy
         self.client = client or build_llm(provider=provider, model=model)
 
     def chat(self, user_message: str, max_rounds: int = 10) -> str:
@@ -137,7 +156,8 @@ class Agent:
                 return reply.get("content") or ""
 
             # execute tool calls, append results, and continue the loop
-            messages.extend(run_tool_calls(self.tools, calls, approver=self.approver))
+            messages.extend(run_tool_calls(self.tools, calls,
+                                           approver=self.approver, policy=self.policy))
 
         return messages[-1].get("content") or "(max rounds reached)"
 
@@ -361,8 +381,12 @@ if __name__ == "__main__":
     if not os.getenv("OPENAI_API_KEY"):
         sys.exit("OPENAI_API_KEY is not set; export it and try again.")
 
+    # 只读工具直接放行，其余工具（含未来新增的）一律人工确认；未知工具被策略拒绝
+    policy = ToolPolicy(default=ASK, rules={"calculate": ALLOW, "read_file": ALLOW})
     agent = Agent(system="You are a helpful assistant with arithmetic and file-reading skills.",
-                  tools=[calculator, make_read_file_tool()])
+                  tools=[calculator, make_read_file_tool()],
+                  approver=ConsoleApprover(),
+                  policy=policy)
 
     print('nano agent ready. type "exit" or Ctrl+C to quit.')
     while True:
