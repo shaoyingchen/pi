@@ -138,13 +138,30 @@ class Agent:
         self.approver = approver
         self.policy = policy
         self.client = client or build_llm(provider=provider, model=model)
+        # 会话历史：首次 chat 时以 system 消息开头，之后每轮 user/assistant/tool
+        # 消息都追加在这里，因此同一个 Agent 实例的多次 chat 共享上下文。
+        self.history: list[dict] = []
+
+    def reset(self) -> None:
+        """清空会话历史；下一次 ``chat`` 会重新以 ``system`` 消息开头。"""
+        self.history = []
+        logger.info("agent session reset")
 
     def chat(self, user_message: str, max_rounds: int = 10) -> str:
-        """Run a full conversation turn and return the final assistant text."""
-        messages: list[dict] = [
-            {"role": "system", "content": self.system},
-            {"role": "user", "content": user_message},
-        ]
+        """Run a full conversation turn and return the final assistant text.
+
+        Messages accumulate in ``self.history`` across calls, so consecutive
+        turns see earlier user/assistant/tool messages (multi-turn memory).
+        Call ``reset()`` to start a fresh session.
+        """
+        if not self.history:
+            self.history.append({"role": "system", "content": self.system})
+            logger.info("agent session started, system=%r", _clip(self.system))
+
+        messages = self.history
+        messages.append({"role": "user", "content": user_message})
+        logger.info("agent chat begin, history_size=%d, user_message=%r",
+                    len(messages), _clip(user_message))
         tool_schemas = [t.schema() for t in self.tools.values()]
 
         for _ in range(max_rounds):
