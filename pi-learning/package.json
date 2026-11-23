@@ -1,0 +1,12 @@
+{
+  "name": "pi-learning",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^1.6.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}
