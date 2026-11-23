@@ -23,6 +23,12 @@ if (!model) {
 // 3. 创建 Agent 会话
 //    createAgentSession() 会返回一个对象，里面有好几个字段；
 //    这里用 { session } 这种「解构赋值」写法，只把 session 字段挑出来用
+// createAgentSession() 内部：
+// ├── 1. 加载 ModelRuntime（读 auth.json / models.json，合并内置 Provider）
+// ├── 2. 初始化 SettingsManager（读 ~/.pi/agent/settings.json，含压缩策略、retry 等）
+// ├── 3. 初始化 SessionManager（默认把会话持久化到 ~/.pi/agent/sessions/<encoded-cwd>/）
+// ├── 4. 加载 DefaultResourceLoader（发现 skills / extensions / AGENTS.md）
+// └── 5. 创建 Agent 实例，默认启用四个内置工具：read / bash / edit / write
 const { session } = await createAgentSession({
     agentDir: configDir, // 指向项目内
     model, modelRuntime
@@ -40,10 +46,11 @@ try {
             // 让文字一段段拼出来（流式打字机效果）
             process.stdout.write(event.assistantMessageEvent.delta);
         }
+        console.log(`📋 [${event.type}]`);
     });
 
     console.log(`🤖 使用模型：${model.provider}/${model.id}\n`);
-    await session.prompt("用一句话介绍你自己。");   // 发问，等 Agent 答完才继续
+    await session.prompt("当前目录有哪些文件？");   // 发问，等 Agent 答完才继续
     console.log("\n");
 } finally {
     session.dispose();   // 释放资源（关监听、断连接）。用 try/finally 包起来，保证出错也能清理

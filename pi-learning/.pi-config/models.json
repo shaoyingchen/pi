@@ -3,7 +3,7 @@
     "depseek": {
       "baseUrl": "https://api.deepseek.com/v1",
       "api": "openai-completions",
-      "apiKey": "sk-4b507374b12f4f00a9b894ab0ef87100",
+      "apiKey": "sk-***",
       "models": [
         { "id": "deepseek-flash", "name": "deepseek-flash" }
       ]
